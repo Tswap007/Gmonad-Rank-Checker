@@ -158,8 +158,8 @@ async function startServer() {
 
     // Start the server
     app.listen(PORT, () => {
-        console.log(`Server running on http://gmonad-rank-checker-production.up.railway.app:${PORT}`);
-        console.log(`API available at http://gmonad-rank-checker-production.up.railway.app:${PORT}/api/holders`);
+        console.log(`Server running on https://gmonad-rank-checker-production.up.railway.app`);
+        console.log(`API available at https://gmonad-rank-checker-production.up.railway.app/api/holders`);
         console.log(`Data will update every 6 hours`);
         console.log(`Next update at: ${new Date(Date.now() + 6 * 60 * 60 * 1000)}`);
     });
