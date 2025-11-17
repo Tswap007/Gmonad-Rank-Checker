@@ -2,10 +2,9 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const fs = require("fs");
-const path = require("path");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Enable CORS for frontend access
 app.use(cors());
@@ -13,9 +12,16 @@ app.use(express.static('public')); // Serve static files
 
 let holdersData = [];
 let lastUpdate = null;
+let isFetching = false;
 
 // Fetch all token holders
 async function fetchAllHolders() {
+    if (isFetching) {
+        console.log("Already fetching, skipping...");
+        return holdersData;
+    }
+
+    isFetching = true;
     console.log("Starting to fetch token holders...");
     const url = "https://api.socialscan.io/monad-testnet/v1/developer/api";
 
@@ -46,6 +52,9 @@ async function fetchAllHolders() {
 
             all = all.concat(result);
             page++;
+
+            // Add small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
 
         // Sort by balance (descending)
@@ -65,9 +74,11 @@ async function fetchAllHolders() {
         );
 
         console.log(`Successfully fetched ${all.length} holders at ${lastUpdate}`);
+        isFetching = false;
         return all;
     } catch (error) {
         console.error("Error fetching holders:", error.message);
+        isFetching = false;
 
         // Try to load from backup file if fetch fails
         if (fs.existsSync("all_tokenholders.json")) {
@@ -91,8 +102,9 @@ function scheduleUpdates() {
     }, SIX_HOURS);
 }
 
-// API endpoint to get all holders data
+// API endpoint to get all holders data (cached)
 app.get("/api/holders", (req, res) => {
+    // Return cached data immediately
     res.json({
         success: true,
         data: holdersData,
@@ -136,32 +148,60 @@ app.get("/api/health", (req, res) => {
         status: "ok",
         lastUpdate: lastUpdate,
         totalHolders: holdersData.length,
-        nextUpdate: lastUpdate ? new Date(lastUpdate.getTime() + 6 * 60 * 60 * 1000) : null
+        nextUpdate: lastUpdate ? new Date(lastUpdate.getTime() + 6 * 60 * 60 * 1000) : null,
+        isFetching: isFetching
+    });
+});
+
+// Force refresh endpoint (optional - for manual updates)
+app.get("/api/refresh", async (req, res) => {
+    if (isFetching) {
+        return res.json({
+            success: false,
+            message: "Already fetching data"
+        });
+    }
+
+    // Start fetching in background
+    fetchAllHolders().catch(err => console.error("Refresh error:", err));
+
+    res.json({
+        success: true,
+        message: "Data refresh started"
     });
 });
 
 // Initialize and start server
 async function startServer() {
-    // Try to load existing data first
+    // Try to load existing data first for instant startup
     if (fs.existsSync("all_tokenholders.json")) {
-        console.log("Loading existing data...");
-        holdersData = JSON.parse(fs.readFileSync("all_tokenholders.json", "utf8"));
-        lastUpdate = new Date(fs.statSync("all_tokenholders.json").mtime);
-        console.log(`Loaded ${holdersData.length} holders from file`);
+        console.log("Loading existing data from file...");
+        try {
+            holdersData = JSON.parse(fs.readFileSync("all_tokenholders.json", "utf8"));
+            lastUpdate = new Date(fs.statSync("all_tokenholders.json").mtime);
+            console.log(`Loaded ${holdersData.length} holders from file (updated: ${lastUpdate})`);
+        } catch (err) {
+            console.error("Error loading backup file:", err);
+        }
     }
 
-    // Fetch fresh data
-    await fetchAllHolders();
-
-    // Schedule future updates
-    scheduleUpdates();
-
-    // Start the server
+    // Start the server immediately
     app.listen(PORT, () => {
         console.log(`Server running on http://localhost:${PORT}`);
         console.log(`API available at http://localhost:${PORT}/api/holders`);
         console.log(`Data will update every 6 hours`);
+    });
+
+    // Fetch fresh data in background after server starts
+    console.log("Fetching fresh data in background...");
+    fetchAllHolders().then(() => {
         console.log(`Next update at: ${new Date(Date.now() + 6 * 60 * 60 * 1000)}`);
+        // Schedule future updates
+        scheduleUpdates();
+    }).catch(err => {
+        console.error("Initial fetch error:", err);
+        // Still schedule updates even if first fetch fails
+        scheduleUpdates();
     });
 }
 
