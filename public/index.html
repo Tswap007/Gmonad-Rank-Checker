@@ -69,6 +69,10 @@
             animation: pulse 2s infinite;
         }
 
+        .status-dot.loading {
+            background: #ff9800;
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -76,6 +80,27 @@
 
         .status-text {
             color: #666;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .progress-bar.show {
+            display: block;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
         }
 
         .search-box {
@@ -240,8 +265,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>🏆 Gmonad Holder Rank Checker.</h1>
-        <p class="subtitle">Check your rank among all token holders.</p>
+        <h1>🏆 Gmonad Token Rank Checker</h1>
+        <p class="subtitle">Check your rank among all token holders</p>
 
         <div class="status-bar">
             <div class="status-item">
@@ -251,6 +276,10 @@
             <div class="status-item">
                 <span class="status-text" id="lastUpdate">-</span>
             </div>
+        </div>
+
+        <div class="progress-bar" id="progressBar">
+            <div class="progress-fill" id="progressFill"></div>
         </div>
 
         <div class="search-box">
@@ -267,7 +296,7 @@
         </button>
 
         <div class="loading" id="loading" style="display: none;">
-            Loading data...
+            Searching...
         </div>
 
         <div class="error" id="error"></div>
@@ -282,7 +311,7 @@
                 <span class="detail-value" id="addressValue"></span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Token Balance</span>
+                <span class="detail-label">Gmonad Balance</span>
                 <span class="detail-value" id="balanceValue"></span>
             </div>
             <div class="detail-row">
@@ -291,40 +320,73 @@
             </div>
         </div>
 
-        <div class="footer">Built by PickleRick
+        <div class="footer">Built By PickleRick
             <a href="https://x.com/ThatCodedDude" target="_blank" rel="noopener noreferrer">
                 (@ThatCodedDude)
-            </a>.
+            </a>
         </div>
     </div>
 
     <script>
         let holdersData = [];
-        const API_URL = 'http://localhost:3000/api';
+        const API_URL = 'https://gmonad-rank-checker-production.up.railway.app/api';
+        // const API_URL = 'http://localhost:3000/api';
 
-        // Load data from server
+        // Check data status first
+        async function checkDataStatus() {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const result = await response.json();
+                return result;
+            } catch (error) {
+                console.error('Error checking status:', error);
+                return null;
+            }
+        }
+
+        // Load data from server (instant if cached)
         async function loadData() {
             try {
-                document.getElementById('loading').style.display = 'block';
-                document.getElementById('statusText').textContent = 'Loading...';
+                const statusDot = document.getElementById('statusDot');
+                const statusText = document.getElementById('statusText');
+                const progressBar = document.getElementById('progressBar');
+                const progressFill = document.getElementById('progressFill');
+
+                // Check if data is ready
+                const health = await checkDataStatus();
+                
+                if (health && health.isFetching) {
+                    statusDot.classList.add('loading');
+                    statusText.textContent = 'Updating data...';
+                    progressBar.classList.add('show');
+                    progressFill.style.width = health.fetchProgress + '%';
+                }
+
+                statusText.textContent = 'Loading...';
                 
                 const response = await fetch(`${API_URL}/holders`);
                 const result = await response.json();
 
-                if (result.success) {
+                if (result.success && result.data.length > 0) {
                     holdersData = result.data;
                     updateStatus(result.lastUpdate, result.totalHolders);
                     
                     document.getElementById('addressInput').disabled = false;
                     document.getElementById('searchBtn').disabled = false;
-                    document.getElementById('loading').style.display = 'none';
+                    progressBar.classList.remove('show');
+                    statusDot.classList.remove('loading');
+                } else if (result.isFetching) {
+                    // Data is being fetched, wait and retry
+                    statusText.textContent = 'Loading data...';
+                    progressBar.classList.add('show');
+                    progressFill.style.width = result.fetchProgress + '%';
+                    setTimeout(loadData, 2000); // Retry in 2 seconds
                 } else {
-                    throw new Error('Failed to load data');
+                    throw new Error('No data available');
                 }
             } catch (error) {
                 console.error('Error loading data:', error);
                 document.getElementById('statusText').textContent = 'Error loading data';
-                document.getElementById('loading').style.display = 'none';
                 showError('Failed to load data. Please refresh the page.');
             }
         }
@@ -358,24 +420,26 @@
 
         // Update the "time ago" text every minute
         function startTimeAgoUpdater() {
-            setInterval(() => {
+            setInterval(async () => {
                 if (holdersData.length > 0) {
-                    const response = fetch(`${API_URL}/health`)
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.lastUpdate) {
-                                updateTimeAgo(data.lastUpdate);
-                            }
-                        })
-                        .catch(err => console.error('Error updating time:', err));
+                    try {
+                        const response = await fetch(`${API_URL}/health`);
+                        const data = await response.json();
+                        if (data.lastUpdate) {
+                            updateTimeAgo(data.lastUpdate);
+                        }
+                    } catch (err) {
+                        console.error('Error updating time:', err);
+                    }
                 }
-            }, 60000); // Update every minute
+            }, 60000);
         }
 
-        function searchAddress() {
+        async function searchAddress() {
             const address = document.getElementById('addressInput').value.trim();
             const errorEl = document.getElementById('error');
             const resultEl = document.getElementById('result');
+            const loadingEl = document.getElementById('loading');
 
             errorEl.classList.remove('show');
             resultEl.classList.remove('show');
@@ -385,38 +449,53 @@
                 return;
             }
 
-            if (!holdersData.length) {
+            if (holdersData.length === 0) {
                 showError('Data not loaded yet. Please wait...');
                 return;
             }
 
-            const normalizedAddress = address.toLowerCase();
-            const index = holdersData.findIndex(
-                holder => holder.TokenHolderAddress.toLowerCase() === normalizedAddress
-            );
+            // Show loading
+            loadingEl.style.display = 'block';
 
-            if (index === -1) {
-                showError('Address not found in holder list');
-                return;
-            }
-
-            const holder = holdersData[index];
-            const rank = index + 1;
-
-            // Convert from Wei to Ether (divide by 10^18)
-            const balanceInEther = parseFloat(holder.TokenHolderQuantity) / 1e18;
-            
-            document.getElementById('rankNumber').textContent = `#${rank}`;
-            document.getElementById('addressValue').textContent = holder.TokenHolderAddress;
-            document.getElementById('balanceValue').textContent = 
-                balanceInEther.toLocaleString(undefined, { 
-                    minimumFractionDigits: 0, 
-                    maximumFractionDigits: 0 
+            try {
+                // Use POST endpoint for faster server-side search
+                const response = await fetch(`${API_URL}/search`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ address })
                 });
-            document.getElementById('totalHolders').textContent = 
-                holdersData.length.toLocaleString();
 
-            resultEl.classList.add('show');
+                const result = await response.json();
+                loadingEl.style.display = 'none';
+
+                if (!result.success) {
+                    showError(result.message || 'Address not found in holder list');
+                    return;
+                }
+
+                const { rank, balance } = result.data;
+
+                // Convert from Wei to Ether (divide by 10^18)
+                const balanceInEther = parseFloat(balance) / 1e18;
+                
+                document.getElementById('rankNumber').textContent = `#${rank}`;
+                document.getElementById('addressValue').textContent = result.data.address;
+                document.getElementById('balanceValue').textContent = 
+                    balanceInEther.toLocaleString(undefined, { 
+                        minimumFractionDigits: 0, 
+                        maximumFractionDigits: 0 
+                    });
+                document.getElementById('totalHolders').textContent = 
+                    result.data.totalHolders.toLocaleString();
+
+                resultEl.classList.add('show');
+            } catch (error) {
+                loadingEl.style.display = 'none';
+                console.error('Search error:', error);
+                showError('Error searching for address. Please try again.');
+            }
         }
 
         function showError(message) {
